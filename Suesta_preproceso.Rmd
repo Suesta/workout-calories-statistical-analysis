@@ -1,0 +1,778 @@
+---
+title: "A4 Análisis Estadístico"
+author: "Víctor Suesta Arribas"
+date: "2026-01-16"
+output:
+  html_document:
+    toc: true
+---
+
+
+## Código inicial (setup + paquetes)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+```{r packages}
+cargar_paquete <- function(paquete) {
+  if (!requireNamespace(paquete, quietly = TRUE)) {
+    stop(
+      paste0(
+        "Paquete '", paquete, "'. ",
+        "Instalado en la consola con: install.packages('", paquete, "')"
+      )
+    )
+  }
+  suppressPackageStartupMessages(
+    library(paquete, character.only = TRUE)
+  )
+}
+
+cargar_paquete("car")
+cargar_paquete("caret")
+```
+
+
+## 1. Preprocesamiento
+
+### 1.1 Nombres de las variables
+
+```{r 1-1-carga-datos}
+datos <- read.csv("Findata.csv", stringsAsFactors = FALSE, check.names = FALSE)
+
+if ("" %in% names(datos)) {
+names(datos)[names(datos) == ""] <- "id"
+}
+
+sapply(datos, class)
+
+head(names(datos))
+```
+
+```{r 1-1-limpieza-nombres}
+limpiar_nombres <- function(nombres) {
+  nombres <- gsub("^X\\.", "", nombres)     # elimina prefijo X. si existe
+  nombres <- gsub("\\.+$", "", nombres)     # elimina puntos finales
+  nombres <- gsub("\\.+", "_", nombres)     # convierte 1+ puntos en "_"
+  nombres <- gsub("_+", "_", nombres)       # colapsa "__" a "_"
+  nombres <- gsub("^_|_$", "", nombres)     # elimina "_" al inicio/final
+  nombres
+}
+
+nombres_antes <- names(datos)
+names(datos) <- limpiar_nombres(names(datos))
+nombres_despues <- names(datos)
+
+head(nombres_antes)
+head(nombres_despues)
+
+any(duplicated(names(datos)))
+any(grepl("__", names(datos)))
+```
+
+
+## Interpretación
+
+- Cargo los datos e inspecciono los nombres originales de las variables.
+- Renombro la variable cuyo nombre aparece vacío a `id` y compruebo los tipos de datos de todas las variables.
+- Normalizo los nombres sustituyendo secuencias de puntos por guiones bajos, eliminando puntos finales y evitando guiones bajos duplicados.
+- Por último, compruebo que no existan nombres duplicados y que no queden dobles guiones bajos.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### 1.2 Variables Weight_kg y Height_m
+
+```{r 1-2-conversion-a-numerico}
+datos$Weight_kg <- suppressWarnings(as.numeric(datos$Weight_kg))
+datos$Height_m  <- suppressWarnings(as.numeric(datos$Height_m))
+
+sum(is.na(datos$Weight_kg))
+sum(is.na(datos$Height_m))
+
+summary(datos$Weight_kg)
+summary(datos$Height_m)
+
+class(datos$Weight_kg)
+class(datos$Height_m)
+
+peso_sospechoso <- !is.na(datos$Weight_kg) & datos$Weight_kg > 200
+datos$Weight_kg[peso_sospechoso] <- datos$Weight_kg[peso_sospechoso] / 2.20
+
+altura_sospechosa <- !is.na(datos$Height_m) & datos$Height_m > 3
+datos$Height_m[altura_sospechosa] <- datos$Height_m[altura_sospechosa] / 39.37
+
+sum(peso_sospechoso, na.rm = TRUE)
+sum(altura_sospechosa, na.rm = TRUE)
+
+summary(datos$Weight_kg)
+summary(datos$Height_m)
+```
+
+## Interpretación
+
+- He convertido `Weight_kg` y `Height_m` a formato numérico para poder operar con ellas.  
+- He revisado los valores ausentes tras la conversión y he inspeccionado los resúmenes para detectar posibles inconsistencias.  
+- He corregido posibles registros en unidades no esperadas: pesos muy altos los he interpretado como libras y los he convertido a kg, y alturas muy altas las he interpretado como pulgadas y las he convertido a metros.  
+- He verificado el resultado final comprobando cuántos valores se han corregido y revisando de nuevo los estadísticos descriptivos.
+
+
+
+
+
+### 1.3 Valores ausentes y atípicos
+
+```{r 1-3-ausentes-y-atipicos}
+na_weight <- sum(is.na(datos$Weight_kg))
+na_height <- sum(is.na(datos$Height_m))
+
+na_weight
+na_height
+
+q1_w <- quantile(datos$Weight_kg, 0.25, na.rm = TRUE)
+q3_w <- quantile(datos$Weight_kg, 0.75, na.rm = TRUE)
+iqr_w <- q3_w - q1_w
+li_w <- q1_w - 1.5 * iqr_w
+ls_w <- q3_w + 1.5 * iqr_w
+
+q1_h <- quantile(datos$Height_m, 0.25, na.rm = TRUE)
+q3_h <- quantile(datos$Height_m, 0.75, na.rm = TRUE)
+iqr_h <- q3_h - q1_h
+li_h <- q1_h - 1.5 * iqr_h
+ls_h <- q3_h + 1.5 * iqr_h
+
+atip_weight <- sum(!is.na(datos$Weight_kg) & (datos$Weight_kg < li_w | datos$Weight_kg > ls_w))
+atip_height <- sum(!is.na(datos$Height_m) & (datos$Height_m < li_h | datos$Height_m > ls_h))
+
+atip_weight
+atip_height
+
+li_w; ls_w
+li_h; ls_h
+```
+
+## Interpretación
+
+- He cuantificado los valores ausentes en `Weight_kg` y `Height_m`.
+- He identificado valores atípicos usando el criterio del rango intercuartílico (IQR), calculando límites inferior y superior como (Q1 - 1.5\cdot IQR) y (Q3 + 1.5\cdot IQR).
+- He obtenido el número de observaciones fuera de esos límites para cada variable y he guardado los rangos resultantes para poder valorar su magnitud en el contexto del conjunto de datos.
+
+
+
+
+
+
+
+
+
+
+
+## 2. Estadística inferencial
+
+### 2.1 ¿Los hombres queman en promedio más calorías que las mujeres? (97,5%)
+
+```{r 2-1-preparacion-datos}
+datos_2 <- datos[!is.na(datos$Calories_Burned) & !is.na(datos$Gender), c("Calories_Burned", "Gender")]
+datos_2$Gender <- factor(datos_2$Gender)
+
+cal_h <- datos_2$Calories_Burned[datos_2$Gender == "Male"]
+cal_m <- datos_2$Calories_Burned[datos_2$Gender == "Female"]
+
+n_h <- length(cal_h)
+n_m <- length(cal_m)
+
+media_h <- mean(cal_h)
+media_m <- mean(cal_m)
+
+sd_h <- sd(cal_h)
+sd_m <- sd(cal_m)
+
+n_h; n_m
+media_h; media_m
+sd_h; sd_m
+
+alpha <- 0.025
+
+se <- sqrt(sd_h^2 / n_h + sd_m^2 / n_m)
+t_obs <- (media_h - media_m) / se
+
+gl <- (sd_h^2 / n_h + sd_m^2 / n_m)^2 /
+((sd_h^2 / n_h)^2 / (n_h - 1) + (sd_m^2 / n_m)^2 / (n_m - 1))
+
+t_crit <- qt(1 - alpha, df = gl)
+p_val <- 1 - pt(t_obs, df = gl)
+
+t_obs
+gl
+t_crit
+p_val
+
+if (t_obs > t_crit) {
+decision <- "Rechazo H0"
+} else {
+decision <- "No rechazo H0"
+}
+decision
+```
+
+## Interpretación
+
+- He planteado un contraste unilateral con \(\alpha = 0.025\): \(H_0: \mu_{hombres} \le \mu_{mujeres}\) frente a \(H_1: \mu_{hombres} > \mu_{mujeres}\).  
+- He obtenido \(t_{obs} = 0.1482\) y \(t_{crit} = 1.9601\) (con \(gl \approx 19979.79\)).  
+- Como \(t_{obs} < t_{crit}\) y el p-valor unilateral es \(p = 0.4411\), no rechazo \(H_0\).  
+- Concluyo que, al 97.5% de confianza, no hay evidencia estadística suficiente para afirmar que los hombres quemen más calorías en promedio que las mujeres en este conjunto de datos.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 3. Modelo de regresión
+
+### 3.1 Regresión lineal múltiple (Calories_Burned)
+
+```{r 3-1-regresion-lineal}
+vars_modelo <- c("Calories_Burned", "Session_Duration_hours", "Experience_Level",
+                 "Workout_Frequency_days_week", "Height_m", "Weight_kg", "Gender", "Workout_Type")
+
+datos_3 <- datos[, vars_modelo]
+datos_3 <- na.omit(datos_3)
+
+datos_3$Gender <- factor(datos_3$Gender)
+datos_3$Workout_Type <- factor(datos_3$Workout_Type)
+
+modelo_lm <- lm(
+  Calories_Burned ~ Session_Duration_hours + Experience_Level +
+    Workout_Frequency_days_week + Height_m + Weight_kg + Gender + Workout_Type,
+  data = datos_3
+)
+
+summary(modelo_lm)
+```
+
+
+## Interpretación
+
+- El modelo es globalmente significativo (\(F\) con \(p < 2.2\cdot 10^{-16}\)) y presenta un ajuste muy alto (\(R^2 = 0.9635\), \(R^2\) ajustado = 0.9635).  
+- La variable con mayor efecto es `Session_Duration_hours` (coeficiente 1052.80; \(p < 2\cdot 10^{-16}\)), lo que indica que, manteniendo el resto constante, una hora adicional de sesión se asocia con un aumento esperado de ~1052.8 calorías quemadas.  
+- `Experience_Level` es estadísticamente significativa (coeficiente 59.09; \(p < 2\cdot 10^{-16}\)): al aumentar una unidad el nivel de experiencia, el valor esperado de `Calories_Burned` aumenta en ~59.1, manteniendo constantes las demás variables.  
+- `Workout_Frequency_days_week` también es significativa (coeficiente 37.07; \(p < 2\cdot 10^{-16}\)).  
+- `Height_m` tiene un efecto pequeño pero significativo (coeficiente 14.47; \(p = 0.0113\)), mientras que `Weight_kg` (\(p = 0.3314\)) y `Gender` (\(p = 0.6202\)) no resultan significativas en presencia del resto de variables.  
+- Respecto a `Workout_Type` (tomando como referencia la categoría base del factor), `HIIT` y `Strength` se asocian con mayores calorías quemadas, mientras que `Yoga` se asocia con menores calorías quemadas (todas con \(p < 2\cdot 10^{-16}\)).  
+
+
+
+
+
+
+### 3.2 Multicolinealidad
+
+```{r 3-2-1-colinealidad-matriz}
+vars_cuant <- c(
+"Session_Duration_hours",
+"Experience_Level",
+"Workout_Frequency_days_week",
+"Height_m",
+"Weight_kg"
+)
+
+mat_cor <- cor(datos_3[, vars_cuant], use = "complete.obs")
+round(mat_cor, 3)
+```
+
+
+```{r 3-2-2-colinealidad-vif}
+vif(modelo_lm)
+```
+
+
+## Interpretación
+
+- He calculado la matriz de correlaciones entre las variables cuantitativas del modelo para explorar dependencias lineales.
+- Observo correlaciones moderadas entre `Session_Duration_hours`, `Experience_Level` y `Workout_Frequency_days_week` (valores alrededor de 0.64–0.70), y una correlación moderada entre `Height_m` y `Weight_kg` (0.354).
+- He calculado los VIF (y, para el factor con varios grados de libertad, el (GVIF^{1/(2\cdot Df)})) y los valores son bajos (máximo (GVIF^{1/(2Df)} \approx 1.51)), por lo que no concluyo presencia de multicolinealidad relevante que comprometa la estimación e interpretación de los coeficientes.
+
+
+ 
+
+
+
+
+
+### 3.3 Diagnóstico de residuos
+
+```{r 3-3-diagnostico-residuos}
+par(mfrow = c(2, 2), mar = c(4, 4, 2, 1))
+plot(modelo_lm)
+par(mfrow = c(1, 1))
+```
+
+
+## Interpretación
+
+- En el gráfico **Residuals vs Fitted** observo una curvatura clara (la línea roja no es aproximadamente horizontal), lo que sugiere que la relación lineal no captura completamente la estructura de los datos.  
+- En el **Q-Q plot** los puntos se separan de la recta sobre todo en las colas, lo que indica que la normalidad de los residuos no se cumple perfectamente.  
+- En el gráfico **Scale-Location** la dispersión de los residuos no es constante a lo largo de los valores ajustados (la línea roja no es plana), lo que apunta a heterocedasticidad.  
+- En **Residuals vs Leverage** hay observaciones con leverage relativamente más alto, pero no se aprecia un patrón dominante de puntos extremadamente influyentes; aun así, conviene tenerlo en cuenta en la interpretación del modelo.
+
+
+
+
+
+
+### 3.4 Regresión logística (Experience_Level == 1)
+
+```{r 3-4-regresion-logistica}
+vars_logit <- c("Experience_Level", "Calories_Burned", "Session_Duration_hours",
+                "Workout_Frequency_days_week", "Height_m", "Weight_kg", "Gender", "Workout_Type")
+
+datos_4 <- datos[, vars_logit]
+datos_4 <- na.omit(datos_4)
+
+datos_4$sin_experiencia <- ifelse(datos_4$Experience_Level == 1, 1, 0)
+
+datos_4$Gender <- factor(datos_4$Gender)
+datos_4$Workout_Type <- factor(datos_4$Workout_Type)
+
+modelo_logit <- glm(
+  sin_experiencia ~ Calories_Burned + Session_Duration_hours +
+    Workout_Frequency_days_week + Height_m + Weight_kg + Gender + Workout_Type,
+  data = datos_4,
+  family = binomial
+)
+
+summary(modelo_logit)
+```
+
+## Interpretación
+
+- He ajustado el modelo logístico para predecir `sin_experiencia` y he observado que varias variables resultan estadísticamente significativas.  
+- `Calories_Burned` aparece con coeficiente negativo (\(-0.0147\), \(p < 2\cdot 10^{-16}\)), lo que indica que, manteniendo el resto constante, a mayor gasto calórico menor probabilidad estimada de pertenecer al grupo sin experiencia.  
+- `Session_Duration_hours` tiene coeficiente positivo (\(11.2067\), \(p < 2\cdot 10^{-16}\)), lo que sugiere que sesiones más largas se asocian con mayor probabilidad estimada de `sin_experiencia`, controlando el resto de variables.  
+- `Workout_Frequency_days_week` es negativa (\(-1.3012\), \(p < 2\cdot 10^{-16}\)), por lo que una mayor frecuencia semanal se asocia con menor probabilidad de `sin_experiencia`.  
+- `Weight_kg` es negativa y significativa (\(-0.00347\), \(p = 0.000395\)), mientras que `Height_m` (\(p = 0.7325\)) y `Gender` (\(p = 0.9324\)) no resultan significativas en este modelo.  
+- Respecto a `Workout_Type` (comparado con la categoría base), `HIIT` y `Strength` muestran asociación positiva y `Yoga` negativa (todos con \(p < 2\cdot 10^{-16}\)).  
+
+
+
+
+
+### 3.5 Matriz de confusión (umbral 0.5)
+
+```{r 3-5-matriz-confusion}
+prob_pred <- predict(modelo_logit, type = "response")
+pred_clase <- ifelse(prob_pred >= 0.5, 1, 0)
+
+tabla_conf <- table(Predicho = pred_clase, Real = datos_4$sin_experiencia)
+tabla_conf
+
+confusionMatrix(
+  factor(pred_clase, levels = c(0, 1)),
+  factor(datos_4$sin_experiencia, levels = c(0, 1)),
+  positive = "1"
+)
+```
+
+## Interpretación 
+
+- Con el umbral \(0.5\), la matriz de confusión queda: VP = 8957, VN = 7215, FP = 1922 y FN = 1896.  
+- La exactitud global es 0.809.  
+- La sensibilidad es 0.8253, lo que indica que el modelo identifica correctamente aproximadamente el 82.5% de los casos sin experiencia.  
+- La especificidad es 0.7896, por lo que clasifica correctamente aproximadamente el 79.0% de los casos con experiencia (clase 0).  
+- En conjunto, el rendimiento es razonablemente equilibrado entre ambas clases (balanced accuracy = 0.8075) para este umbral.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 4. ANOVA de un factor
+
+### 4.1 Exploración gráfica (Calories_Burned vs Workout_Type)
+
+```{r 4-1-boxplot}
+datos_5 <- datos[, c("Calories_Burned", "Workout_Type")]
+datos_5 <- na.omit(datos_5)
+datos_5$Workout_Type <- factor(datos_5$Workout_Type)
+
+boxplot(Calories_Burned ~ Workout_Type, data = datos_5,
+        xlab = "Workout_Type", ylab = "Calories_Burned")
+```
+
+## Interpretación
+
+- He representado `Calories_Burned` por tipo de entrenamiento para comparar visualmente la distribución entre grupos y evaluar si existen diferencias aparentes entre medias o dispersión.
+
+
+
+
+
+
+
+### 4.2 Planteamiento del contraste ANOVA (1 factor)
+
+```{r 4-2-anova-un-factor}
+modelo_aov <- aov(Calories_Burned ~ Workout_Type, data = datos_5)
+summary(modelo_aov)
+```
+
+## Interpretación 
+
+- He contrastado \(H_0\): las medias de `Calories_Burned` son iguales para todos los niveles de `Workout_Type`, frente a \(H_1\): al menos una media difiere.  
+- La tabla ANOVA da un estadístico \(F = 2780\) con \(p < 2\cdot 10^{-16}\), por lo que rechazo \(H_0\).  
+- Concluyo que existen diferencias estadísticamente significativas en la media de `Calories_Burned` entre, al menos, dos tipos de entrenamiento.
+
+
+
+
+
+### 4.3 Medias por grupo y diferencias respecto a una referencia
+
+```{r 4-3-medias-por-grupo}
+tapply(datos_5$Calories_Burned, datos_5$Workout_Type, mean)
+
+modelo_lm_aov <- lm(Calories_Burned ~ Workout_Type, data = datos_5)
+summary(modelo_lm_aov)
+```
+
+## Interpretación 
+
+- Las medias de `Calories_Burned` por grupo son: Cardio = 1211.54, HIIT = 1652.53, Strength = 1361.43 y Yoga = 897.11.  
+- En el modelo equivalente con `lm()`, el intercepto (1211.55) corresponde a la media del nivel de referencia (`Cardio`).  
+- Los coeficientes indican diferencias respecto a `Cardio`:  
+  - `HIIT` es, en promedio, +440.99 calorías (p < 2·10^-16).  
+  - `Strength` es, en promedio, +149.89 calorías (p < 2·10^-16).  
+  - `Yoga` es, en promedio, −314.44 calorías (p < 2·10^-16).  
+- Con estos resultados, las diferencias entre tipos de entrenamiento no solo son significativas, sino también relevantes en magnitud, especialmente entre HIIT y Yoga.
+
+
+
+
+
+### 4.4 Diagnóstico básico del modelo ANOVA
+
+```{r 4-4-diagnostico-anova}
+par(mfrow = c(2, 2), mar = c(4, 4, 2, 1))
+plot(modelo_aov)
+par(mfrow = c(1, 1))
+```
+
+## Interpretación
+
+- He revisado los gráficos diagnósticos del ANOVA para valorar si los residuos presentan un comportamiento razonable en términos de normalidad y homocedasticidad, y si existen observaciones con influencia elevada.
+
+
+
+
+
+
+
+
+
+
+### 4.5 Tamaño del efecto (eta cuadrado)
+
+```{r 4-5-tamano-efecto}
+tabla_anova <- anova(modelo_aov)
+
+ss_factor <- tabla_anova[1, "Sum Sq"]
+ss_resid  <- tabla_anova[2, "Sum Sq"]
+ss_total  <- ss_factor + ss_resid
+
+eta2 <- ss_factor / ss_total
+eta2
+```
+
+
+
+### 4.6 Adecuación del modelo
+
+#### 4.6.1 Normalidad de los residuos (Anderson-Darling)
+
+```{r 4-6-1-normalidad-ad}
+cargar_paquete("nortest")
+ad.test(residuals(modelo_aov))
+```
+
+#### 4.6.2 Homogeneidad de varianzas (Levene)
+
+```{r 4-6-2-homogeneidad-l}
+levene_out <- leveneTest(Calories_Burned ~ Workout_Type, data = datos_5, center = median)
+levene_out
+p_levene <- levene_out[1, "Pr(>F)"]
+p_levene
+```
+
+#### 4.6.3 ANOVA robusto y comparaciones por parejas
+
+```{r 4-6-3-comparaciones-anova}
+if (!is.na(p_levene) && p_levene < 0.05) {
+welch_out <- oneway.test(Calories_Burned ~ Workout_Type, data = datos_5, var.equal = FALSE)
+welch_out
+
+cargar_paquete("PMCMRplus")
+tamhane_out <- PMCMRplus::tamhaneT2Test(Calories_Burned ~ Workout_Type, data = datos_5)
+tamhane_out
+} else {
+cargar_paquete("DescTools")
+scheffe_out <- DescTools::PostHocTest(modelo_aov, method = "scheffe")
+scheffe_out
+}
+```
+
+
+
+## Interpretación 4.5–4.6
+
+- He obtenido (\eta^2 = 0.2943), por lo que aproximadamente un 29.43% de la variabilidad de `Calories_Burned` queda explicada por `Workout_Type`.
+- En el test de Anderson–Darling he obtenido (p < 2.2\cdot 10^{-16}), así que no puedo asumir normalidad estricta de los residuos.
+- En el test de Levene he obtenido (p \approx 4.03\cdot 10^{-257}), por lo que rechazo homogeneidad de varianzas entre grupos.
+- Dado que hay evidencia clara de heterocedasticidad, he aplicado el ANOVA robusto de Welch y he realizado comparaciones a posteriori con el test T2 de Tamhane.
+- Las comparaciones por parejas resultan significativas en todos los casos ((p < 0.05)), por lo que concluyo que las medias de `Calories_Burned` difieren entre cada par de tipos de entrenamiento.
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 5. ANOVA multifactorial
+
+### 5.1 Creación de BMI_bin
+
+```{r 5-1-bmi-bin}
+datos_6 <- datos[, c("Calories_Burned", "Workout_Type", "BMI")]
+datos_6 <- na.omit(datos_6)
+
+datos_6$Workout_Type <- factor(datos_6$Workout_Type)
+
+datos_6$BMI_bin <- ifelse(datos_6$BMI > 25, "Alto", "Normal_Bajo")
+datos_6$BMI_bin <- factor(datos_6$BMI_bin, levels = c("Normal_Bajo", "Alto"))
+
+table(datos_6$BMI_bin)
+table(datos_6$Workout_Type, datos_6$BMI_bin)
+```
+
+## Interpretación
+
+- He creado la variable `BMI_bin` binaria, asignando `Alto` si `BMI > 25` y `Normal_Bajo` en caso contrario.
+- He comprobado la distribución de `BMI_bin` y su cruce con `Workout_Type` para asegurar que hay observaciones en los distintos grupos antes de ajustar el modelo multifactorial.
+
+
+
+
+
+
+### 5.2 Exploración gráfica de posible interacción
+
+```{r 5-2-exploracion-interaccion}
+medias_grupo <- aggregate(
+  Calories_Burned ~ Workout_Type + BMI_bin,
+  data = datos_6,
+  FUN = mean
+)
+
+medias_grupo
+
+with(medias_grupo, {
+  interaction.plot(
+    x.factor = Workout_Type,
+    trace.factor = BMI_bin,
+    response = Calories_Burned,
+    fun = mean,
+    xlab = "Workout_Type",
+    ylab = "Media de Calories_Burned",
+    trace.label = "BMI_bin"
+  )
+})
+```
+
+## Interpretación
+
+- He calculado la media de `Calories_Burned` para cada combinación de `Workout_Type` y `BMI_bin`.
+- He representado un gráfico de interacción para evaluar visualmente si el efecto de `Workout_Type` sobre `Calories_Burned` cambia según `BMI_bin` (líneas no paralelas sugerirían interacción).
+
+
+
+
+
+
+
+### 5.3 ANOVA multifactorial con interacción
+
+```{r 5-3-anova-dos-factores}
+modelo_aov2_int <- aov(Calories_Burned ~ Workout_Type * BMI_bin, data = datos_6)
+summary(modelo_aov2_int)
+```
+
+## Interpretación
+
+- He planteado un ANOVA de dos factores incluyendo interacción: `Workout_Type`, `BMI_bin` y el término `Workout_Type*BMI_bin`.
+- He revisado en la tabla ANOVA los p-valores asociados a: (i) `Workout_Type`, (ii) `BMI_bin` y (iii) la interacción, para decidir si cada efecto es significativo.
+
+
+
+
+
+
+
+### 5.4 ANOVA multifactorial sin interacción
+
+```{r 5-4-anova-sin-interaccion}
+modelo_aov2 <- aov(Calories_Burned ~ Workout_Type + BMI_bin, data = datos_6)
+summary(modelo_aov2)
+```
+
+## Interpretación
+
+- La interacción `Workout_Type:BMI_bin` no resulta significativa ((p = 0.9555)), así que he ajustado el modelo sin interacción.
+- En el modelo aditivo he revisado si `Workout_Type` y `BMI_bin` tienen un efecto significativo sobre la media de `Calories_Burned`.
+
+
+
+
+
+
+
+
+
+
+### 5.5 Diagnóstico básico del ANOVA multifactorial
+
+```{r 5-5-diagnostico-anova2}
+par(mfrow = c(2, 2), mar = c(4, 4, 2, 1))
+plot(modelo_aov2)
+par(mfrow = c(1, 1))
+```
+
+
+## Interpretación
+
+- En **Residuals vs Fitted** no observo un patrón lineal claro, pero sí una estructura por bandas coherente con que los valores ajustados toman pocos niveles.  
+- En el **Q-Q plot** se aprecia desviación respecto a la recta en las colas, por lo que la normalidad de los residuos no se cumple estrictamente.  
+- En **Scale-Location** la dispersión no parece completamente constante entre niveles, lo que es consistente con heterocedasticidad.  
+- En **Residuals vs Leverage** aparecen puntos con leverage relativamente alto, sin evidencia visual de un pequeño conjunto de observaciones dominando el ajuste.
+
+
+
+
+
+
+
+
+### 5.6 Contraste robusto (Welch) y comparaciones por parejas (según homogeneidad)
+
+```{r 5-6-robusto-y-posthoc}
+levene_2 <- leveneTest(Calories_Burned ~ interaction(Workout_Type, BMI_bin),
+                       data = datos_6, center = median)
+levene_2
+
+p_levene_2 <- levene_2[1, "Pr(>F)"]
+p_levene_2
+
+if (!is.na(p_levene_2) && p_levene_2 < 0.05) {
+  welch_2 <- oneway.test(Calories_Burned ~ interaction(Workout_Type, BMI_bin),
+                         data = datos_6, var.equal = FALSE)
+  welch_2
+  
+  posthoc_2 <- pairwise.t.test(
+    x = datos_6$Calories_Burned,
+    g = interaction(datos_6$Workout_Type, datos_6$BMI_bin),
+    p.adjust.method = "holm",
+    pool.sd = FALSE
+  )
+
+  posthoc_2
+} else {
+  tukey_2 <- TukeyHSD(aov(Calories_Burned ~ interaction(Workout_Type, BMI_bin), data = datos_6))
+  tukey_2
+}
+```
+
+## Interpretación 
+
+- El test de Levene sobre las combinaciones `Workout_Type`·`BMI_bin` es significativo (\(p < 2.2\cdot 10^{-16}\)), por lo que rechazo homogeneidad de varianzas entre grupos y utilizo el contraste robusto de Welch junto con comparaciones por parejas tipo Welch con ajuste de Holm.  
+- En las comparaciones por parejas, la mayoría de pares presentan diferencias significativas (\(p < 0.05\)).  
+- Identifico además pares sin evidencia de diferencia, como `Cardio.Normal_Bajo` vs `Cardio.Alto` (\(p = 0.77\)) y varios pares con \(p = 1.00\) (por ejemplo `HIIT.Normal_Bajo` vs `HIIT.Alto`, `Strength.Normal_Bajo` vs `Strength.Alto`, y `Yoga.Normal_Bajo` vs `Yoga.Alto`).  
+- En conjunto, las diferencias se explican principalmente por el tipo de entrenamiento, mientras que la partición por `BMI_bin` no introduce cambios sistemáticos dentro de cada `Workout_Type` en varios casos.
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 6. Conclusiones
+
+- En el preprocesamiento he revisado y normalizado los nombres de las variables (incluyendo el caso del nombre vacío, que he pasado a `id`). Además, he comprobado los tipos de dato y he convertido `Weight_kg` y `Height_m` a numérico. Tras esa conversión aparecen 10 valores ausentes en cada variable, que he mantenido como NA para no introducir imputaciones arbitrarias.
+- En la comparación de medias de `Calories_Burned` entre hombres y mujeres con un contraste unilateral al 97.5% ((\alpha=0.025)), el resultado no es significativo ((t_{obs}=0.1482), (p=0.4411)), así que no tengo evidencia estadística para afirmar que los hombres quemen más calorías en promedio que las mujeres en estos datos.
+- En la regresión lineal múltiple para `Calories_Burned`, el modelo es globalmente significativo y tiene un ajuste muy alto ((R^2=0.9635)). Las variables con efecto más claro son `Session_Duration_hours`, `Experience_Level`, `Workout_Frequency_days_week` y `Workout_Type`. En cambio, `Weight_kg` y `Gender` no resultan significativas una vez controlo por el resto de variables del modelo.
+- Sobre la multicolinealidad, la matriz de correlaciones muestra asociaciones moderadas entre algunas variables (por ejemplo entre `Session_Duration_hours`, `Experience_Level` y `Workout_Frequency_days_week`), pero los VIF son bajos ((GVIF^{1/(2Df)}) alrededor de 1–1.51), así que no considero que la colinealidad esté afectando de forma importante a la estimación.
+- En el diagnóstico del modelo lineal, los gráficos sugieren que los supuestos clásicos (normalidad y varianza constante) no se cumplen de manera perfecta. Por ello, aunque el modelo explica muy bien la variabilidad, interpreto con cierta cautela los contrastes y p-valores, especialmente por posibles efectos de heterocedasticidad.
+- En la regresión logística para `sin_experiencia`, con umbral 0.5 obtengo un rendimiento razonable (accuracy = 0.809; sensibilidad = 0.8253; especificidad = 0.7896). Varias variables aparecen como significativas (por ejemplo `Calories_Burned`, `Session_Duration_hours`, `Workout_Frequency_days_week` y `Workout_Type`), mientras que `Gender` y `Height_m` no lo son en este ajuste.
+- En el ANOVA de un factor (`Workout_Type`) rechazo igualdad de medias ((F=2780), (p<2\cdot 10^{-16})). Las medias por grupo muestran un patrón claro (HIIT > Strength > Cardio > Yoga) y el tamaño de efecto es (\eta^2=0.2943), es decir, `Workout_Type` explica aproximadamente un 29.4% de la variabilidad de `Calories_Burned`.
+- Como los tests de Anderson–Darling y Levene son significativos, no puedo asumir normalidad estricta ni homocedasticidad. Por eso he complementado el ANOVA clásico con el ANOVA de Welch y comparaciones post-hoc con T2 de Tamhane, donde las diferencias entre tipos de entrenamiento aparecen significativas en todas las comparaciones por parejas.
+- En el ANOVA multifactorial con `BMI_bin`, la interacción `Workout_Type:BMI_bin` no es significativa ((p=0.9555)) y el efecto principal de `BMI_bin` tampoco es significativo al 5% ((p=0.0737)). En cambio, `Workout_Type` mantiene un efecto claramente significativo, por lo que el tipo de entrenamiento sigue siendo el factor principal asociado a diferencias en `Calories_Burned`.
+- Finalmente, al analizar el factor combinado (`Workout_Type`·`BMI_bin`) encuentro heterocedasticidad (Levene significativo) y, en las comparaciones por parejas, la mayoría de diferencias vienen dadas por el tipo de entrenamiento. Dentro de un mismo `Workout_Type`, el cambio entre `Normal_Bajo` y `Alto` no muestra un patrón consistente en varios casos (por ejemplo, `Cardio.Normal_Bajo` vs `Cardio.Alto` no es significativo).
+
+
+
+
